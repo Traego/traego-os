@@ -1,0 +1,64 @@
+# Spins up a controller and three traegod "machines" that announce and wait to
+# be adopted. `docker compose up` simulates plugging machines into the pool;
+# the integration test (deploy/integration_test.go) drives the adoptions.
+name: traego
+
+x-traegod: &traegod
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.traegod
+  depends_on:
+    controller:
+      condition: service_healthy
+  restart: on-failure
+  environment: &traegod-env
+    TRAEGO_CONTROLLER: http://controller:8443
+    TRAEGO_JOIN_TOKEN: dev-join-token
+    TRAEGO_HB_INTERVAL: 3s
+
+services:
+  controller:
+    build:
+      context: ../..
+      dockerfile: backend/deploy/Dockerfile.controller
+    environment:
+      TRAEGO_ADDR: ":8443"
+      TRAEGO_ADMIN_KEY: dev-admin-key
+      TRAEGO_JOIN_TOKEN: dev-join-token
+      TRAEGO_HB_TIMEOUT: 10s
+    ports:
+      - "8443:8443"
+    healthcheck:
+      test: ["CMD", "/controller", "healthcheck"]
+      interval: 1s
+      timeout: 2s
+      retries: 15
+
+  # An always-on GPU box -> destined for the inference role.
+  tg-gpu:
+    <<: *traegod
+    environment:
+      <<: *traegod-env
+      TRAEGO_NODE_NAME: rack-gpu-01
+      TRAEGO_NODE_CLASS: persistent
+      TRAEGO_GPU_VRAM_GB: "48"
+      TRAEGO_MEMORY_GB: "128"
+
+  # An always-on app box.
+  tg-app:
+    <<: *traegod
+    environment:
+      <<: *traegod-env
+      TRAEGO_NODE_NAME: rack-app-01
+      TRAEGO_NODE_CLASS: persistent
+      TRAEGO_MEMORY_GB: "64"
+
+  # An ephemeral workstation -> burst capacity.
+  tg-burst:
+    <<: *traegod
+    environment:
+      <<: *traegod-env
+      TRAEGO_NODE_NAME: pat-workstation
+      TRAEGO_NODE_CLASS: ephemeral
+      TRAEGO_GPU_VRAM_GB: "24"
+      TRAEGO_MEMORY_GB: "32"

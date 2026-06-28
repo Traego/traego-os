@@ -1,0 +1,15 @@
+node_modules
+/dist
+.DS_Store
+*.local
+.gstack/
+
+# Go
+backend/coverage.out
+backend/cov-internal.out
+backend/controller
+backend/traegod
+
+# Built SPA embedded into the controller (keep only the placeholder)
+backend/internal/web/dist/*
+!backend/internal/web/dist/.gitkeep

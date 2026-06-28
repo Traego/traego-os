@@ -1,0 +1,24 @@
+# Build context is the REPO ROOT (so both the Vue app and the Go module are in scope).
+#
+# Stage 1 — build the designed SPA.
+FROM node:22-alpine AS ui
+WORKDIR /ui
+COPY package.json package-lock.json* ./
+RUN npm install --no-audit --no-fund
+COPY index.html vite.config.js ./
+COPY src ./src
+RUN npm run build         # -> /ui/dist
+
+# Stage 2 — build the controller, embedding the built SPA via go:embed.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY backend/go.mod ./
+COPY backend/cmd ./cmd
+COPY backend/internal ./internal
+COPY --from=ui /ui/dist ./internal/web/dist
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/controller ./cmd/controller
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/controller /controller
+EXPOSE 8443 8444
+ENTRYPOINT ["/controller"]
