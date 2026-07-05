@@ -407,14 +407,31 @@ func TestNewValidation(t *testing.T) {
 	}
 }
 
-func TestCORSPreflight(t *testing.T) {
+// TestCORSDisabledByDefault: no configured origin means no CORS headers at
+// all — a wildcard would let any website a LAN user visits call the API from
+// their browser.
+func TestCORSDisabledByDefault(t *testing.T) {
 	h := newHarness(t)
-	rec := h.do("OPTIONS", "/api/v1/nodes", nil, nil)
+	rec := h.do("GET", "/api/v1/nodes", nil, adminHdr)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("unexpected CORS header %q with no origin configured", got)
+	}
+}
+
+func TestCORSConfiguredOrigin(t *testing.T) {
+	st := store.NewMemory()
+	srv, err := New(Config{Store: st, AdminKey: "admin-key", JoinToken: "join-tok", CORSOrigin: "http://localhost:5173"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("OPTIONS", "/api/v1/nodes", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("preflight: want 204, got %d", rec.Code)
 	}
-	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Fatalf("missing CORS header")
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("CORS origin = %q, want the configured origin (never *)", got)
 	}
 }
 

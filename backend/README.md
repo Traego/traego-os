@@ -61,13 +61,16 @@ Brings up a controller plus three `traegod` "machines" (an always-on GPU box, an
 app box, and an ephemeral workstation). They announce and wait. Adopt them:
 
 ```bash
-# list discovered nodes (grab id + pairing_code)
-curl -s -H "Authorization: Bearer dev-admin-key" localhost:8443/api/v1/nodes | jq
+# list discovered nodes (grab id + pairing_code) — the harness's dev key;
+# real deployments generate one (see RUNBOOK.md). The harness runs with
+# TRAEGO_TLS=on and publishes on host port 18443 so it can coexist with a
+# dev controller on 8443.
+curl -sk -H "Authorization: Bearer dev-admin-key" https://localhost:18443/api/v1/nodes | jq
 
 # adopt one
-curl -s -X POST -H "Authorization: Bearer dev-admin-key" \
+curl -sk -X POST -H "Authorization: Bearer dev-admin-key" \
   -d '{"pairing_code":"XXXX-XXXX","role":"inference"}' \
-  localhost:8443/api/v1/nodes/<id>/adopt
+  https://localhost:18443/api/v1/nodes/<id>/adopt
 ```
 
 `make integration` does exactly this automatically and asserts all three reach
@@ -88,7 +91,21 @@ curl -s -X POST -H "Authorization: Bearer dev-admin-key" \
 | `DELETE` | `/api/v1/nodes/{id}` | admin | remove a node |
 | `GET` | `/api/v1/ca` | — | controller CA certificate (PEM) |
 | `POST` | `/api/v1/nodes/{id}/certificate` | node credential | sign a node CSR → CA-signed client cert |
-| `GET` | `/api/v1/system` | — | the controller's own live host metrics (CPU/mem/uptime) |
+| `GET` | `/api/v1/system` | admin | the controller's own live host metrics (CPU/mem/uptime) |
+
+All secret checks are constant-time, rate-limited per source IP (10 failures/
+minute, then 429), and logged. The enroll secret is one-shot: it is spent when
+the credential is issued.
+
+**TLS:** the API+UI listener is **plain HTTP by default** — the LAN-friendly
+first-run (no browser cert warning), same spirit as UniFi's inform endpoint and
+Home Assistant. Node security does not depend on it: joins pin the CA
+fingerprint and the `:8444` data plane is always mTLS. To encrypt the UI:
+`TRAEGO_TLS=on` (self-signed by the controller CA, browsers warn once) or
+`TRAEGO_TLS_CERT`/`TRAEGO_TLS_KEY` for a real certificate — for homelabs the
+easiest real cert is **Let's Encrypt via DNS-01** (no public ingress needed):
+point a domain you own at your LAN IP, prove ownership by DNS with certbot,
+lego, or Caddy, and hand the resulting pair to the controller.
 
 Nodes report their own CPU/memory in each heartbeat (`{"metrics": {...}}`), surfaced per-node in the UI.
 
@@ -109,9 +126,9 @@ for client-side routes. Build the SPA into the embed dir with `npm run build:emb
 
 ## Config (env)
 
-**controller:** `TRAEGO_ADDR` (`:8443`), `TRAEGO_ADMIN_KEY` (req), `TRAEGO_JOIN_TOKEN` (req), `TRAEGO_HB_TIMEOUT` (`30s`), `TRAEGO_SECURE_ADDR` (`:8444`), `TRAEGO_SECURE_HOSTS` (`traego-controller,localhost,127.0.0.1`).
+**controller:** `TRAEGO_ADDR` (`:8443`), `TRAEGO_ADMIN_KEY` (req), `TRAEGO_JOIN_TOKEN` (req), `TRAEGO_HB_TIMEOUT` (`30s`), `TRAEGO_TLS` (`off`; `on` = TLS from the controller CA), `TRAEGO_TLS_CERT`/`TRAEGO_TLS_KEY` (operator-provided cert pair, implies TLS), `TRAEGO_CORS_ORIGIN` (none; set to the Vite dev origin during UI dev), `TRAEGO_SECURE_ADDR` (`:8444`), `TRAEGO_SECURE_HOSTS` (`traego-controller,localhost,127.0.0.1`), `TRAEGO_DB` (`traego.db`).
 
-**traegod:** `TRAEGO_CONTROLLER` (req), `TRAEGO_JOIN_TOKEN` (req), `TRAEGO_NODE_NAME`, `TRAEGO_NODE_CLASS` (`persistent`|`ephemeral`), `TRAEGO_HB_INTERVAL` (`10s`), `TRAEGO_MEMORY_GB`, `TRAEGO_GPU_VRAM_GB`, `TRAEGO_SECURE` (`true` to use mTLS), `TRAEGO_SECURE_URL` (defaults to `https://<controller-host>:8444`).
+**traegod:** `TRAEGO_CONTROLLER` (req), `TRAEGO_JOIN_TOKEN` (req), `TRAEGO_CA_FINGERPRINT` (pin the controller CA; strongly recommended — otherwise trust-on-first-use with a warning), `TRAEGO_NODE_NAME`, `TRAEGO_NODE_CLASS` (`persistent`|`ephemeral`), `TRAEGO_HB_INTERVAL` (`10s`), `TRAEGO_MEMORY_GB`, `TRAEGO_GPU_VRAM_GB`, `TRAEGO_SECURE` (mTLS on by default; `false` to opt out), `TRAEGO_SECURE_URL` (defaults to `https://<controller-host>:8444`).
 
 ## Secure mode (mTLS)
 
