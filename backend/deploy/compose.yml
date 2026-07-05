@@ -12,7 +12,8 @@ x-traegod: &traegod
       condition: service_healthy
   restart: on-failure
   environment: &traegod-env
-    TRAEGO_CONTROLLER: http://controller:8443
+    # TOFU inside the throwaway harness; real nodes pin TRAEGO_CA_FINGERPRINT
+    TRAEGO_CONTROLLER: https://controller:8443
     TRAEGO_JOIN_TOKEN: dev-join-token
     TRAEGO_HB_INTERVAL: 3s
 
@@ -23,11 +24,15 @@ services:
       dockerfile: backend/deploy/Dockerfile.controller
     environment:
       TRAEGO_ADDR: ":8443"
+      # TLS on in the harness: the integration test exercises the CA-pinning
+      # join path. Bare-metal first-run defaults to plain HTTP.
+      TRAEGO_TLS: "on"
       TRAEGO_ADMIN_KEY: dev-admin-key
       TRAEGO_JOIN_TOKEN: dev-join-token
       TRAEGO_HB_TIMEOUT: 10s
     ports:
-      - "8443:8443"
+      # host 18443 so the harness can run alongside a dev controller on 8443
+      - "18443:8443"
     healthcheck:
       test: ["CMD", "/controller", "healthcheck"]
       interval: 1s
