@@ -27,12 +27,13 @@ const P = {
   link: '<path d="M9 12h6"/><path d="M10 7H8a5 5 0 000 10h2M14 7h2a5 5 0 010 10h-2"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.8 7.8 0 000-2l2-1.5-2-3.4-2.3 1a7.8 7.8 0 00-1.7-1l-.4-2.5h-4l-.4 2.5a7.8 7.8 0 00-1.7 1l-2.3-1-2 3.4 2 1.5a7.8 7.8 0 000 2l-2 1.5 2 3.4 2.3-1a7.8 7.8 0 001.7 1l.4 2.5h4l.4-2.5a7.8 7.8 0 001.7-1l2.3 1 2-3.4-2-1.5z"/>',
   thermo: '<path d="M10 13.5V5a2 2 0 114 0v8.5a4 4 0 11-4 0z"/>',
-  trend: '<path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v5h-5"/>'
+  trend: '<path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v5h-5"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>'
 }
 </script>
 
 <template>
-  <svg :width="size" :height="size" viewBox="0 0 24 24" fill="none"
+  <svg :width="size" :height="size" viewBox="0 0 24 24" fill="none" aria-hidden="true"
        stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
        v-html="P[name] || ''" />
 </template>

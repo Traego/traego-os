@@ -1,23 +1,27 @@
 <script setup>
 import { computed } from 'vue'
 import { useController } from '../stores/controller'
+import { useUI } from '../stores/ui'
 import Icon from './Icon.vue'
 import Sparkline from './Sparkline.vue'
 
 const ctl = useController()
+const ui = useUI()
 
-const nav = [
+// AI is always in the nav — discoverability first. Until the module is
+// installed the item carries an "install" hint and the AI page prompts for it.
+const nav = computed(() => [
   { to: '/', icon: 'dashboard', label: 'Dashboard' },
   { to: '/hardware', icon: 'server', label: 'Hardware' },
-  { to: '/ai', icon: 'sparkles', label: 'AI' }
-]
+  { to: '/ai', icon: 'sparkles', label: 'AI', hint: ctl.loaded && ctl.connected && !ctl.aiInstalled ? 'install' : '' }
+])
 
 const tps = computed(() => Math.round(ctl.activity?.tokens_per_sec ?? 0))
 const history = computed(() => ctl.activity?.history ?? [])
 </script>
 
 <template>
-  <aside class="sb">
+  <aside class="sb" :class="{ open: ui.sidebarOpen }">
     <div class="brand">
       <div class="logo"><Icon name="bolt" :size="17" /></div>
       <div class="col" style="line-height:1.1">
@@ -29,6 +33,7 @@ const history = computed(() => ctl.activity?.history ?? [])
     <nav class="nav">
       <RouterLink v-for="i in nav" :key="i.to" :to="i.to" class="navi" active-class="on" :class="{exact: i.to==='/'}">
         <Icon :name="i.icon" :size="17" /><span>{{ i.label }}</span>
+        <span v-if="i.hint" class="navhint">{{ i.hint }}</span>
       </RouterLink>
     </nav>
 
@@ -67,6 +72,11 @@ const history = computed(() => ctl.activity?.history ?? [])
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column;
   padding: 16px 12px;
+  z-index: 50;
+}
+@media (max-width: 880px) {
+  .sb { transform: translateX(-100%); transition: transform .22s ease; }
+  .sb.open { transform: translateX(0); box-shadow: var(--shadow-pop); }
 }
 .brand { display: flex; align-items: center; gap: 11px; padding: 6px 8px 18px; }
 .logo {
@@ -80,13 +90,14 @@ const history = computed(() => ctl.activity?.history ?? [])
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; }
 .navi {
   display: flex; align-items: center; gap: 11px;
-  padding: 9px 11px; border-radius: 9px;
+  padding: 9px 11px; border-radius: var(--radius-sm);
   color: var(--tx-2); font-size: 13.5px; font-weight: 530;
-  transition: all .12s ease; position: relative;
+  transition: background-color .12s ease, color .12s ease; position: relative;
 }
 .navi:hover { background: rgba(255,255,255,0.04); color: var(--tx-0); }
-.navi.on { background: linear-gradient(90deg, rgba(56,189,248,0.16), rgba(56,189,248,0.04)); color: #fff; }
+.navi.on { background: linear-gradient(90deg, rgba(56,189,248,0.16), rgba(56,189,248,0.04)); color: var(--tx-0); }
 .navi.on::before { content:''; position:absolute; left:-12px; top:8px; bottom:8px; width:3px; border-radius:0 3px 3px 0; background: var(--brand); box-shadow: 0 0 10px var(--brand-glow); }
+.navhint { margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .03em; color: var(--ai); background: rgba(167,139,250,.1); border: 1px solid rgba(167,139,250,.3); border-radius: 999px; padding: 1px 7px; }
 
 .sb-foot { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; flex: none; }
 .token-card, .mesh-card { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
