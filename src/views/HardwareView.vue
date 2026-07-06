@@ -257,7 +257,7 @@ function compMeta(t) { return COMPONENTS[t] || { label: t, icon: 'grid', color: 
         <div style="flex:1">
           <div style="font-weight:600;color:var(--tx-0);font-size:13.5px">Add a machine to the mesh</div>
           <div class="muted" style="font-size:12px;margin-top:2px">Install the worker on any Linux box; it discovers this controller and waits to be adopted:</div>
-          <code class="cmd">curl -fsSL https://get.traego.io | sh -s -- join</code>
+          <code class="cmd">curl -fsSL https://traego.ai/install.sh | sh -s -- join --controller http://&lt;this-host&gt;:8443 --token &lt;JOIN_TOKEN&gt;</code>
         </div>
       </div>
     </template>

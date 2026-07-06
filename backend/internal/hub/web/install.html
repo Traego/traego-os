@@ -17,20 +17,17 @@
     <div class="step">
       <h3>1 · Run the controller</h3>
       <p>On the machine that will lead your mesh (any Docker host):</p>
-      <div class="snippet">docker run -d --name traego \
-  -p 8443:8443 -p 8444:8444 \
-  -e TRAEGO_ADMIN_KEY=$(openssl rand -hex 16) \
-  -e TRAEGO_JOIN_TOKEN=$(openssl rand -hex 16) \
-  -v traego-data:/data -e TRAEGO_DB=/data/traego.db \
-  ghcr.io/traego/controller:latest</div>
-      <p>Then open <span style="font-family:var(--mono)">http://&lt;that-machine&gt;:8443</span> —
+      <div class="snippet">curl -fsSL https://traego.ai/install.sh | sh -s -- controller</div>
+      <p>It generates your admin key and join token, prints them once, and serves the
+      dashboard at <span style="font-family:var(--mono)">http://&lt;that-machine&gt;:8443</span> —
       plain HTTP on your LAN by default, TLS and Let's Encrypt when you want them.</p>
     </div>
 
     <div class="step">
       <h3>2 · Join your machines</h3>
-      <p>On every other box you want in the mesh:</p>
-      <div class="snippet">curl -fsSL https://get.traego.io | sh -s -- join</div>
+      <p>On every other box, paste the join command the controller printed:</p>
+      <div class="snippet">curl -fsSL https://traego.ai/install.sh | sh -s -- join \
+  --controller http://&lt;controller&gt;:8443 --token &lt;JOIN_TOKEN&gt;</div>
       <p>Each machine prints a pairing code and appears in your dashboard waiting to be
       adopted. Confirm the code, pick a role, done — it heartbeats over mTLS from then on.</p>
     </div>
