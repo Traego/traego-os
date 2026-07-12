@@ -6,21 +6,36 @@ import Icon from '../components/Icon.vue'
 // LIVE: manages the controller's local AI models via Ollama.
 const ctl = useController()
 const busy = ref('')
+const rowError = ref({ id: '', msg: '' }) // inline, next to the row that failed
 let poll = null
 
 onMounted(() => { ctl.fetchModels(); poll = setInterval(() => ctl.fetchModels(), 1500) })
 onUnmounted(() => clearInterval(poll))
 
-async function deploy(m) { busy.value = m.id; try { await ctl.deployModel(m.id) } finally { busy.value = '' } }
-async function enable(m) { busy.value = m.id; try { await ctl.enableModel(m.id) } catch (e) { alert(e.message) } finally { busy.value = '' } }
-async function disable(m) { busy.value = m.id; try { await ctl.disableModel(m.id) } catch (e) { alert(e.message) } finally { busy.value = '' } }
+async function run(m, fn) {
+  busy.value = m.id
+  rowError.value = { id: '', msg: '' }
+  try { await fn() } catch (e) { rowError.value = { id: m.id, msg: e.message } } finally { busy.value = '' }
+}
+const deploy = (m) => run(m, () => ctl.deployModel(m.id))
+const enable = (m) => run(m, () => ctl.enableModel(m.id))
+const disable = (m) => run(m, () => ctl.disableModel(m.id))
 </script>
 
 <template>
   <div class="page">
+    <div v-if="!ctl.aiInstalled" class="card card-pad" style="display:flex;align-items:center;gap:14px">
+      <Icon name="sparkles" :size="20" style="color:var(--ai)"/>
+      <div style="flex:1">
+        <div style="font-weight:600;color:var(--tx-0)">The AI module isn't installed</div>
+        <div class="muted" style="font-size:12.5px;margin-top:2px">Install it on the Hardware page (with a VRAM reservation) to deploy and manage models.</div>
+      </div>
+      <RouterLink to="/hardware" class="btn btn-primary btn-sm">Go to Hardware</RouterLink>
+    </div>
+    <template v-if="ctl.aiInstalled">
     <div class="page-head between">
       <div>
-        <h1><Icon name="sparkles" :size="22" style="color:var(--ai)"/> AI Inference</h1>
+        <h2 class="page-title"><Icon name="sparkles" :size="22" style="color:var(--ai)"/> AI Inference</h2>
         <p class="muted" style="margin-top:5px">
           Private local models on this machine ·
           <span class="mono">{{ ctl.machineMemGB ? Math.round(ctl.machineMemGB) + ' GB RAM' : '—' }}</span>
@@ -45,6 +60,14 @@ async function disable(m) { busy.value = m.id; try { await ctl.disableModel(m.id
 
     <div class="section-title"><h2>Model catalog</h2><span class="rule"/>
       <span class="faint" style="font-size:11px">only models that fit {{ Math.round(ctl.machineMemGB) }} GB are deployable</span>
+    </div>
+
+    <div v-if="!ctl.models.length" class="card card-pad catalog-empty">
+      <Icon name="sparkles" :size="22" style="color:var(--tx-3)"/>
+      <div>
+        <div style="font-weight:600;color:var(--tx-0)">No models in the catalog yet</div>
+        <div class="muted" style="font-size:12.5px;margin-top:3px">The catalog fills in once the controller can reach its inference backend.</div>
+      </div>
     </div>
 
     <div class="grid models">
@@ -73,16 +96,19 @@ async function disable(m) { busy.value = m.id; try { await ctl.disableModel(m.id
           <!-- deployed -->
           <template v-else-if="m.deployed">
             <span class="pill ok"><Icon name="check" :size="11"/> deployed</span>
-            <button v-if="!m.enabled" class="btn btn-primary btn-sm" :disabled="busy===m.id || !ctl.backendHealthy" @click="enable(m)">Enable for users</button>
-            <button v-else class="btn btn-sm" :disabled="busy===m.id" @click="disable(m)">Disable</button>
+            <button v-if="!m.enabled" class="btn btn-sm" :disabled="busy===m.id || !ctl.backendHealthy"
+              title="Users can pick this model in the chat" @click="enable(m)">Enable in chat</button>
+            <button v-else class="btn btn-sm btn-ghost" :disabled="busy===m.id" @click="disable(m)">Disable</button>
           </template>
           <!-- available to deploy -->
           <button v-else class="btn btn-sm" :disabled="busy===m.id || !ctl.backendHealthy" @click="deploy(m)">
             <Icon name="update" :size="13"/> Deploy
           </button>
+          <span v-if="rowError.id===m.id" class="rowerr" role="alert">{{ rowError.msg }}</span>
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -96,4 +122,7 @@ async function disable(m) { busy.value = m.id; try { await ctl.disableModel(m.id
 .mname { font-size: 14px; font-weight: 650; color: var(--tx-0); }
 .actions { display: flex; align-items: center; gap: 10px; flex: none; }
 .deploying { min-width: 170px; }
+.rowerr { font-size: 12px; color: var(--crit); max-width: 220px; }
+.catalog-empty { display: flex; align-items: center; gap: 14px; border-style: dashed; }
+@media (max-width: 640px) { .model { flex-direction: column; align-items: flex-start; gap: 10px; } .actions { flex-wrap: wrap; } }
 </style>

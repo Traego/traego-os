@@ -3,8 +3,13 @@
 //
 // Config via env:
 //
-//	TRAEGO_CONTROLLER   controller base URL, e.g. http://controller:8443 (required)
+//	TRAEGO_CONTROLLER   controller base URL, e.g. https://controller:8443 (required)
 //	TRAEGO_JOIN_TOKEN   join token (required)
+//	TRAEGO_CA_FINGERPRINT  sha256 of the controller CA cert (printed by the
+//	                       controller at boot); pins the controller identity
+//	                       so the join can't be intercepted. Strongly
+//	                       recommended — without it the CA is trusted on
+//	                       first use.
 //	TRAEGO_NODE_NAME    display name (default: hostname)
 //	TRAEGO_NODE_CLASS   persistent | ephemeral (default persistent)
 //	TRAEGO_HB_INTERVAL  heartbeat interval, Go duration (default 10s)
@@ -51,6 +56,7 @@ func main() {
 		HeartbeatInterval: hb,
 		Secure:            secure,
 		SecureURL:         secureURL,
+		CAFingerprint:     os.Getenv("TRAEGO_CA_FINGERPRINT"),
 		Logf:              log.Printf,
 	})
 

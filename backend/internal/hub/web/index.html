@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Traego — your hardware, your AI, one control plane</title>
+  <meta name="description" content="Traego turns the machines you already own into a private mesh: adopted in minutes, managed from one dashboard, running AI that never leaves the building.">
+  <link rel="stylesheet" href="/landing.css">
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav">
+      <a class="brand" href="/"><span class="logo">⚡</span><span class="bname">traego</span></a>
+      <div class="nav-links">
+        <a href="/install">Install</a>
+        <a href="/buy">Hardware</a>
+        <a href="https://github.com/Traego/traego-os">GitHub</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <div>
+        <h1>Your hardware.<br>Your AI.<br><em>One control plane.</em></h1>
+        <p class="sub">Traego turns the machines you already own into a private mesh —
+          adopted in minutes, managed from one dashboard, running models where your
+          data lives. <b>Nothing leaves the building.</b></p>
+        <div class="ctas">
+          <a class="btn btn-primary" href="/install">Install the container</a>
+          <a class="btn btn-ghost" href="/buy">Buy a controller →</a>
+          <span class="cta-note"><span class="dot"></span>Open source · runs on the hardware in your closet</span>
+        </div>
+      </div>
+      <figure class="term" aria-label="Adopting a machine with Traego">
+        <div class="term-bar"><i></i><i></i><i></i><span class="term-title">homelab-mini — traegod</span></div>
+        <pre><span class="t-dim">$</span> curl -fsSL https://traego.ai/install.sh | sh -s -- join
+<span class="t-dim">traegod 0.1 — announcing to controller…</span>
+announced as <span class="t-brand">n-8fc28b87</span> — pairing code: <span class="t-code">2S6E-JKL6</span>
+<span class="t-dim">waiting to be adopted…</span>
+<span class="t-ok">adopted</span> as role=<span class="t-brand">inference</span> — credential issued
+<span class="t-ok">mTLS established</span> — this machine is in your mesh</pre>
+      </figure>
+    </header>
+  </div>
+
+  <div class="rule"></div>
+
+  <div class="wrap">
+    <section class="duo">
+      <div>
+        <span class="kicker">Adopt</span>
+        <h2>Plug a machine in. Type one code. It's yours.</h2>
+        <p class="lead">Any Linux box, Mac, or mini PC announces itself to your controller
+          and waits. You confirm the pairing code it prints — proof it's really your
+          machine — and it joins the mesh with its own mTLS identity. No YAML, no
+          inventory files, no agent config.</p>
+      </div>
+      <div class="visual">
+        <div class="kv">
+          <div class="row"><span class="k">homelab-mini</span><span class="v"><span class="pill">online · mTLS</span></span></div>
+          <div class="row"><span class="k">role</span><span class="v">inference</span></div>
+          <div class="row"><span class="k">pool</span><span class="v">28 cores · 48 GB unified</span></div>
+          <div class="row"><span class="k">security</span><span class="v">CA-signed · certificate rotates daily</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="rule"></div>
+
+  <div class="wrap">
+    <section class="duo">
+      <div class="visual">
+        <div class="kv">
+          <div class="row"><span class="k">qwen2.5:0.5b</span><span class="v"><span class="pill ai">enabled · default</span></span></div>
+          <div class="row"><span class="k">llama3.2:1b</span><span class="v">deployed</span></div>
+          <div class="row"><span class="k">tokens/sec</span><span class="v">live, measured from generations</span></div>
+          <div class="row"><span class="k">chat</span><span class="v">private · runs on-prem</span></div>
+        </div>
+      </div>
+      <div>
+        <span class="kicker">Run AI</span>
+        <h2>A private model catalog on hardware you can point at.</h2>
+        <p class="lead">Install the AI module with one click and Traego manages the
+          backend for you — deploy models sized to your machines, enable them for the
+          people in your house or your team, and chat with them knowing every token
+          was generated on your own silicon.</p>
+      </div>
+    </section>
+  </div>
+
+  <div class="rule"></div>
+
+  <div class="wrap">
+    <section class="duo">
+      <div>
+        <span class="kicker">Scale</span>
+        <h2>One hub, every site.</h2>
+        <p class="lead">Controllers enroll outbound to a hub — hosted at traego.ai or
+          self-hosted — so the garage, the office, and the cabin show up in one list.
+          The hub is an index and a pipe: your data stays on your machines, and every
+          site keeps working even when the internet doesn't.</p>
+      </div>
+      <div class="visual">
+        <div class="kv">
+          <div class="row"><span class="k">garage</span><span class="v"><span class="pill">online</span> 1 machine</span></div>
+          <div class="row"><span class="k">home rack</span><span class="v"><span class="pill">online</span> 2 machines</span></div>
+          <div class="row"><span class="k">source of truth</span><span class="v">on-prem, always</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="rule"></div>
+
+  <div class="wrap">
+    <footer>
+      <a class="brand" href="/"><span class="logo">⚡</span><span class="bname">traego</span></a>
+      <div class="links">
+        <a href="/install">Install</a>
+        <a href="/buy">Hardware</a>
+        <a href="https://github.com/Traego/traego-os">GitHub</a>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

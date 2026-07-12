@@ -12,7 +12,7 @@ RUN npm run build         # -> /ui/dist
 # Stage 2 — build the controller, embedding the built SPA via go:embed.
 FROM golang:1.26-alpine AS build
 WORKDIR /src
-COPY backend/go.mod ./
+COPY backend/go.mod backend/go.sum ./
 COPY backend/cmd ./cmd
 COPY backend/internal ./internal
 COPY --from=ui /ui/dist ./internal/web/dist

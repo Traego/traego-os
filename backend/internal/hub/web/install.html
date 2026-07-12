@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Traego</title>
+  <meta name="description" content="Run the Traego controller in a container, then join your machines to the mesh.">
+  <link rel="stylesheet" href="/landing.css">
+</head>
+<body>
+  <div class="page-narrow">
+    <a class="back" href="/">← traego</a>
+    <h1>Install the controller</h1>
+    <p class="sub">The controller is one container. It serves the dashboard, adopts your
+      machines, and manages the AI module. Local-first: it needs nothing from us to run.</p>
+
+    <div class="step">
+      <h3>1 · Run the controller</h3>
+      <p>On the machine that will lead your mesh (any Docker host):</p>
+      <div class="snippet">curl -fsSL https://traego.ai/install.sh | sh -s -- controller</div>
+      <p>It generates your admin key and join token, prints them once, and serves the
+      dashboard at <span style="font-family:var(--mono)">http://&lt;that-machine&gt;:8443</span> —
+      plain HTTP on your LAN by default, TLS and Let's Encrypt when you want them.</p>
+    </div>
+
+    <div class="step">
+      <h3>2 · Join your machines</h3>
+      <p>On every other box, paste the join command the controller printed:</p>
+      <div class="snippet">curl -fsSL https://traego.ai/install.sh | sh -s -- join \
+  --controller http://&lt;controller&gt;:8443 --token &lt;JOIN_TOKEN&gt;</div>
+      <p>Each machine prints a pairing code and appears in your dashboard waiting to be
+      adopted. Confirm the code, pick a role, done — it heartbeats over mTLS from then on.</p>
+    </div>
+
+    <div class="step">
+      <h3>3 · Optional: install the AI module</h3>
+      <p>One click in the dashboard. Traego starts and manages the inference backend
+      itself, and your model catalog fills in — sized to the memory your machines
+      actually have.</p>
+    </div>
+
+    <div class="step">
+      <h3>Prefer hardware that arrives pre-plugged?</h3>
+      <p><a href="/buy" style="color:var(--brand)">The Traego Hub is coming →</a></p>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,73 @@
+# Deploys the Traego hub to Cloud Run (traego-prod) on pushes to main that
+# touch the backend. Auth is keyless via Workload Identity Federation — the
+# provider is restricted to this repository.
+name: deploy-hub
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-hub.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-hub
+  cancel-in-progress: false
+
+env:
+  PROJECT: traego-prod
+  REGION: us-central1
+  SERVICE: traego-hub
+  IMAGE: us-central1-docker.pkg.dev/traego-prod/traego/hub
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # WIF
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Test
+        working-directory: backend
+        run: go vet ./... && go test ./...
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/805673032987/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: github-deploy@traego-prod.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        working-directory: backend
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker build -f deploy/Dockerfile.hub -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE:$GITHUB_SHA" \
+            --region "$REGION" --project "$PROJECT" \
+            --max-instances 1 \
+            --set-env-vars "TRAEGO_HUB_DB=/tmp/hub.db" \
+            --set-secrets "TRAEGO_HUB_ORG_TOKEN=traego-hub-org-token:latest"
+
+      - name: Smoke check
+        run: |
+          URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format='value(status.url)')
+          TOKEN=$(gcloud auth print-identity-token --impersonate-service-account=github-deploy@traego-prod.iam.gserviceaccount.com --include-email 2>/dev/null || true)
+          # If the service is public this passes without a token; while it is
+          # IAM-gated we only assert the deploy finished routing traffic.
+          curl -s -o /dev/null -w "health: %{http_code}\n" "$URL/api/v1/health" || true

@@ -3,6 +3,16 @@
    A unified, hardware-forward control surface.
    ============================================================ */
 
+/* Inter is the brand face; self-hosted so it actually loads offline
+   (a homelab controller can't rely on a font CDN). */
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Surfaces — deep, cool, layered */
   --bg-0: #0a0d13;          /* app backdrop */
@@ -19,7 +29,7 @@
   --tx-0: #f4f7fb;          /* headings */
   --tx-1: #c4cdda;          /* body */
   --tx-2: #8c97a8;          /* muted */
-  --tx-3: #5d6776;          /* faint */
+  --tx-3: #77839a;          /* faint — floor: 4.5:1 on --bg-0 (AA) */
 
   /* Brand — Traego */
   --brand: #38bdf8;         /* signal cyan */
@@ -84,6 +94,17 @@ button { font-family: inherit; cursor: pointer; }
 
 ::selection { background: rgba(56,189,248,0.3); }
 
+/* Keyboard focus — visible on every interactive element, mouse clicks stay clean */
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #232c3b; border-radius: 8px; border: 2px solid var(--bg-0); }
@@ -122,7 +143,7 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--bg-3);
   color: var(--tx-0);
   font-size: 13px; font-weight: 550;
-  transition: all .14s ease;
+  transition: background-color .14s ease, border-color .14s ease, filter .14s ease, transform .14s ease;
   white-space: nowrap;
 }
 .btn:hover { background: #232d3d; border-color: rgba(255,255,255,0.2); }
@@ -135,6 +156,8 @@ button { font-family: inherit; cursor: pointer; }
 .btn-primary:hover { filter: brightness(1.07); background: linear-gradient(180deg, var(--brand), #1aa3e8); }
 .btn-ghost { background: transparent; border-color: var(--line); color: var(--tx-1); }
 .btn-ghost:hover { background: rgba(255,255,255,0.04); }
+.btn-danger { background: rgba(251,113,133,.12); border-color: rgba(251,113,133,.4); color: var(--crit); }
+.btn-danger:hover { background: rgba(251,113,133,.2); border-color: var(--crit); }
 .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
@@ -154,6 +177,18 @@ button { font-family: inherit; cursor: pointer; }
 .pill.crit { color: var(--crit); border-color: rgba(251,113,133,0.3); background: rgba(251,113,133,0.08); }
 .pill.brand { color: var(--brand); border-color: rgba(56,189,248,0.3); background: rgba(56,189,248,0.08); }
 .pill.ai { color: var(--ai); border-color: rgba(167,139,250,0.3); background: rgba(167,139,250,0.08); }
+
+/* Icon tile — the rounded-square icon container used across views.
+   Tint it with --cc (component color); size with --tile (default 34px). */
+.tile {
+  --tile: 34px;
+  width: var(--tile); height: var(--tile); flex: none;
+  border-radius: calc(var(--tile) * 0.29);
+  display: grid; place-items: center;
+  color: var(--cc, var(--tx-2));
+  background: color-mix(in srgb, var(--cc, var(--tx-2)) 13%, var(--bg-inset));
+  border: 1px solid color-mix(in srgb, var(--cc, var(--tx-2)) 28%, transparent);
+}
 
 /* Status dot with glow + pulse */
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
@@ -183,6 +218,15 @@ button { font-family: inherit; cursor: pointer; }
 
 /* Page scaffolding */
 .page { padding: 26px 30px 60px; max-width: 1320px; }
+@media (max-width: 640px) { .page { padding: 18px 16px 48px; } }
+/* Views use an h2 for their page heading — the topbar owns the page's single h1 */
+.page-title { font-size: 22px; display: flex; align-items: center; gap: 12px; }
+
+/* Touch devices get full-size targets without changing the desktop density */
+@media (pointer: coarse) {
+  .btn, .btn-sm { min-height: 44px; }
+  .navi { min-height: 44px; }
+}
 .page-head { margin-bottom: 22px; }
 .page-head h1 { display: flex; align-items: center; gap: 12px; }
 .section-title { display: flex; align-items: center; gap: 10px; margin: 28px 0 14px; }

@@ -50,7 +50,7 @@ func TestRecordActivityAndEndpoint(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		h.srv.RecordActivity()
 	}
-	rec := h.do("GET", "/api/v1/activity", nil, nil)
+	rec := h.do("GET", "/api/v1/activity", nil, adminHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("activity: %d", rec.Code)
 	}
@@ -69,7 +69,7 @@ func TestRecordActivityHistoryCaps(t *testing.T) {
 	for i := 0; i < activityCap+25; i++ {
 		h.srv.RecordActivity()
 	}
-	rec := h.do("GET", "/api/v1/activity", nil, nil)
+	rec := h.do("GET", "/api/v1/activity", nil, adminHdr)
 	var resp activityResp
 	mustJSON(t, rec, &resp)
 	if len(resp.History) != activityCap {

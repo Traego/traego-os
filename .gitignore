@@ -13,3 +13,4 @@ backend/traegod
 # Built SPA embedded into the controller (keep only the placeholder)
 backend/internal/web/dist/*
 !backend/internal/web/dist/.gitkeep
+*.db

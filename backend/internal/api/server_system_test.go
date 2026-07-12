@@ -20,10 +20,17 @@ func TestSystemEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("GET", "/api/v1/system", nil)
+	req.Header.Set("Authorization", "Bearer k")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("system: %d", rec.Code)
+	}
+	// and without the admin key, host metrics are not disclosed
+	anon := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(anon, httptest.NewRequest("GET", "/api/v1/system", nil))
+	if anon.Code != http.StatusUnauthorized {
+		t.Fatalf("system without auth: want 401, got %d", anon.Code)
 	}
 	var s metrics.Sample
 	mustJSON(t, rec, &s)

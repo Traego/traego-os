@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	mrand "math/rand/v2"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,6 +36,14 @@ type Config struct {
 	AdminKey         string        // bearer token for operator/admin endpoints
 	JoinToken        string        // shared token a node presents to announce
 	HeartbeatTimeout time.Duration // online -> offline after this without a heartbeat
+
+	// CORSOrigin, when set, is the single origin allowed to call the API
+	// cross-origin (e.g. the Vite dev server). Empty means no CORS headers:
+	// the embedded UI is same-origin and needs none.
+	CORSOrigin string
+
+	// Logf, when set, receives security-relevant events (auth failures).
+	Logf func(format string, args ...any)
 
 	// CA, when set, enables certificate issuance and the mTLS data plane
 	// (SecureHandler). CertTTL bounds issued node-cert lifetime.
@@ -68,6 +77,10 @@ type Server struct {
 	actHist       []float64
 	actPrevTokens int64
 	actPrevTime   time.Time
+
+	// per-IP auth-failure limiter (guessing resistance for all secrets)
+	authMu    sync.Mutex
+	authFails map[string]*failWindow
 }
 
 // New validates cfg and returns a Server with defaults applied.
@@ -102,8 +115,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HomeSite.ID == "" {
 		cfg.HomeSite = store.Site{ID: "local", Name: "Local site"}
 	}
+	if cfg.Logf == nil {
+		cfg.Logf = func(string, ...any) {}
+	}
 	_ = cfg.Store.PutSite(&cfg.HomeSite) // ensure the home site exists
-	return &Server{cfg: cfg}, nil
+	return &Server{cfg: cfg, authFails: map[string]*failWindow{}}, nil
 }
 
 // Handler returns the routed HTTP handler (method-aware via Go 1.22 patterns,
@@ -132,14 +148,17 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	}
 	if s.cfg.Inference != nil {
+		mux.HandleFunc("GET /api/v1/modules", s.handleModules)
+		mux.HandleFunc("POST /api/v1/modules/ai/install", s.handleInstallAI)
+		mux.HandleFunc("POST /api/v1/modules/ai/uninstall", s.handleUninstallAI)
 		mux.HandleFunc("GET /api/v1/models", s.handleModels)
 		mux.HandleFunc("POST /api/v1/models/{id}/deploy", s.handleDeploy)
 		mux.HandleFunc("POST /api/v1/models/{id}/enable", s.handleEnable)
 		mux.HandleFunc("POST /api/v1/models/{id}/disable", s.handleDisable)
-		mux.HandleFunc("GET /api/v1/chat/models", s.handleChatModels) // public: selectable models
-		mux.HandleFunc("POST /api/v1/chat", s.handleChat)             // public: end-user inference
+		mux.HandleFunc("GET /api/v1/chat/models", s.handleChatModels)
+		mux.HandleFunc("POST /api/v1/chat", s.handleChat)
 	}
-	return cors(mux)
+	return cors(mux, s.cfg.CORSOrigin)
 }
 
 // SecureHandler is the mTLS data plane, served on a separate TLS listener whose
@@ -170,7 +189,11 @@ type announceResp struct {
 }
 
 func (s *Server) handleAnnounce(w http.ResponseWriter, r *http.Request) {
+	if s.authLimited(w, r) {
+		return
+	}
 	if !ctEq(r.Header.Get("X-Traego-Join-Token"), s.cfg.JoinToken) {
+		s.authFailure(r, "join token")
 		writeErr(w, http.StatusUnauthorized, "invalid join token")
 		return
 	}
@@ -239,6 +262,7 @@ func (s *Server) handleAdopt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ctEq(req.PairingCode, n.PairingCode) {
+		s.authFailure(r, "pairing code")
 		writeErr(w, http.StatusForbidden, "pairing code mismatch")
 		return
 	}
@@ -271,16 +295,28 @@ func (s *Server) handleCredential(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.authLimited(w, r) {
+		return
+	}
 	var req credentialReq
 	if !decode(w, r, &req) {
 		return
 	}
 	if !ctEq(req.EnrollSecret, n.EnrollSecret) {
+		s.authFailure(r, "enroll secret")
 		writeErr(w, http.StatusForbidden, "invalid enroll secret")
 		return
 	}
 	if n.State == store.StatePending {
 		writeErr(w, http.StatusConflict, "node not yet adopted")
+		return
+	}
+	// One-shot: the enroll secret is spent the moment the credential is handed
+	// out, so it can't serve as a second permanent credential. A node that
+	// loses the response must re-announce.
+	n.EnrollSecret = ""
+	if err := s.cfg.Store.Update(n); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not issue credential")
 		return
 	}
 	writeJSON(w, http.StatusOK, credentialResp{Credential: n.Credential, Role: n.Role, State: n.State})
@@ -310,7 +346,10 @@ func readMetrics(r *http.Request) *metrics.Sample {
 }
 
 // handleSystem reports the controller's own host metrics.
-func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	writeJSON(w, http.StatusOK, s.cfg.System())
 }
 
@@ -324,8 +363,75 @@ func (s *Server) machineMemGB() float64 {
 	return 1e6 // unknown -> don't gate fit
 }
 
+// moduleView is an installed (or installable) module on the controller node.
+type moduleView struct {
+	Type      string  `json:"type"`
+	Installed bool    `json:"installed"`
+	VRAMGB    float64 `json:"vram_gb,omitempty"`
+}
+
+// handleModules lists the controller node's modules. The controller module is
+// always present; the AI module reports whether it's been installed + its VRAM
+// reservation.
+func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	mods := []moduleView{
+		{Type: "controller", Installed: true},
+		{Type: "ai", Installed: s.cfg.Inference.Installed(), VRAMGB: s.cfg.Inference.VRAMReservedGB()},
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"modules": mods})
+}
+
+func (s *Server) handleInstallAI(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var req struct {
+		VRAMGB float64 `json:"vram_gb"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.VRAMGB < 0 {
+		writeErr(w, http.StatusBadRequest, "vram_gb must be >= 0")
+		return
+	}
+	if err := s.cfg.Inference.Install(r.Context(), req.VRAMGB); err != nil {
+		msg := "AI backend unreachable — is Ollama running?"
+		if !errors.Is(err, inference.ErrBackendDown) {
+			msg = err.Error() // supervisor errors are actionable (e.g. binary missing)
+		}
+		writeErr(w, http.StatusBadGateway, msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, moduleView{Type: "ai", Installed: true, VRAMGB: req.VRAMGB})
+}
+
+func (s *Server) handleUninstallAI(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	s.cfg.Inference.Uninstall()
+	writeJSON(w, http.StatusOK, map[string]string{"uninstalled": "ai"})
+}
+
+// requireAIModule gates the AI endpoints behind an explicit install. Returns
+// false (and writes 409) when the module isn't installed.
+func (s *Server) requireAIModule(w http.ResponseWriter) bool {
+	if !s.cfg.Inference.Installed() {
+		writeErr(w, http.StatusConflict, "AI module is not installed")
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
+		return
+	}
+	if !s.requireAIModule(w) {
 		return
 	}
 	mem := s.machineMemGB()
@@ -341,6 +447,9 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
+	if !s.requireAIModule(w) {
+		return
+	}
 	if err := s.cfg.Inference.Deploy(r.PathValue("id")); err != nil {
 		writeErr(w, http.StatusNotFound, "unknown model")
 		return
@@ -350,6 +459,9 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEnable(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
+		return
+	}
+	if !s.requireAIModule(w) {
 		return
 	}
 	id := r.PathValue("id")
@@ -369,6 +481,9 @@ func (s *Server) handleDisable(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
+	if !s.requireAIModule(w) {
+		return
+	}
 	id := r.PathValue("id")
 	if err := s.cfg.Inference.Disable(id); errors.Is(err, inference.ErrUnknownModel) {
 		writeErr(w, http.StatusNotFound, "unknown model")
@@ -377,10 +492,18 @@ func (s *Server) handleDisable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"disabled": id})
 }
 
-// handleChat is the public end-user inference endpoint. It accepts the full
+// handleChat is the end-user inference endpoint. It accepts the full
 // conversation (messages) so the model has context; a bare prompt is also
-// accepted as a single-turn shorthand.
+// accepted as a single-turn shorthand. Admin-authed for now: an unauthenticated
+// inference endpoint lets any reachable client (including any website in a
+// LAN user's browser) burn the GPU. A dedicated chat token is a later slice.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if !s.requireAIModule(w) {
+		return
+	}
 	var req struct {
 		Messages []inference.Message `json:"messages"`
 		Prompt   string              `json:"prompt"`
@@ -412,8 +535,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleChatModels lists the models a chat user can select — the set enabled
-// for end users (public).
-func (s *Server) handleChatModels(w http.ResponseWriter, _ *http.Request) {
+// for end users.
+func (s *Server) handleChatModels(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if !s.requireAIModule(w) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"models":  s.cfg.Inference.EnabledList(),
 		"default": s.cfg.Inference.Enabled(),
@@ -429,6 +558,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		n.Metrics = m
 	}
 	n.State = store.StateOnline
+	// A bearer heartbeat means the node is NOT currently on the mTLS plane —
+	// reflect that honestly so the UI never shows a stale "secured" badge.
+	n.Secured = false
 	n.LastHeartbeat = s.cfg.Now()
 	if err := s.cfg.Store.Update(n); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not record heartbeat")
@@ -687,7 +819,10 @@ func (s *Server) RecordActivity() {
 	}
 }
 
-func (s *Server) handleActivity(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	s.actMu.Lock()
 	hist := make([]float64, len(s.actHist))
 	copy(hist, s.actHist)
@@ -727,10 +862,78 @@ func (s *Server) ReapOffline() int {
 	return n
 }
 
+// ---- Auth-failure rate limiting ----
+//
+// Every secret comparison in the API records failures per source IP; an IP
+// that keeps failing gets cut off before any comparison runs. This turns
+// online guessing of the admin key / join token / credentials from unlimited
+// tries into a few per minute, and makes attempts visible in the log.
+
+const (
+	authFailLimit  = 10          // failures allowed per window per IP
+	authFailWindow = time.Minute // fixed window
+)
+
+type failWindow struct {
+	count int
+	start time.Time
+}
+
+// authLimited reports (and responds) whether the caller has exhausted its
+// failure budget. Call before comparing any secret.
+func (s *Server) authLimited(w http.ResponseWriter, r *http.Request) bool {
+	ip := clientIP(r)
+	now := s.cfg.Now()
+	s.authMu.Lock()
+	fw := s.authFails[ip]
+	limited := fw != nil && now.Sub(fw.start) < authFailWindow && fw.count >= authFailLimit
+	s.authMu.Unlock()
+	if limited {
+		writeErr(w, http.StatusTooManyRequests, "too many failed authentication attempts, retry later")
+	}
+	return limited
+}
+
+// authFailure records a failed secret check and logs it with the source IP.
+func (s *Server) authFailure(r *http.Request, what string) {
+	ip := clientIP(r)
+	now := s.cfg.Now()
+	s.authMu.Lock()
+	fw := s.authFails[ip]
+	if fw == nil || now.Sub(fw.start) >= authFailWindow {
+		// new window; also an opportunistic prune of stale entries
+		for k, v := range s.authFails {
+			if now.Sub(v.start) >= authFailWindow {
+				delete(s.authFails, k)
+			}
+		}
+		fw = &failWindow{start: now}
+		s.authFails[ip] = fw
+	}
+	fw.count++
+	n := fw.count
+	s.authMu.Unlock()
+	s.cfg.Logf("auth failure (%s) from %s (%d/%d in window)", what, ip, n, authFailLimit)
+}
+
+func clientIP(r *http.Request) string {
+	// Deliberately not honoring X-Forwarded-For: the controller serves
+	// clients directly, and a spoofable header would defeat the limiter.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // ---- Helpers ----
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.authLimited(w, r) {
+		return false
+	}
 	if !ctEq(bearer(r), s.cfg.AdminKey) {
+		s.authFailure(r, "admin key")
 		writeErr(w, http.StatusUnauthorized, "admin authorization required")
 		return false
 	}
@@ -749,6 +952,9 @@ func (s *Server) lookup(w http.ResponseWriter, id string) (*store.Node, bool) {
 // nodeByCredential authenticates a node-scoped request: the {id} must exist and
 // the bearer token must match that node's issued credential.
 func (s *Server) nodeByCredential(w http.ResponseWriter, r *http.Request) (*store.Node, bool) {
+	if s.authLimited(w, r) {
+		return nil, false
+	}
 	n, err := s.cfg.Store.Get(r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "node not found")
@@ -756,6 +962,7 @@ func (s *Server) nodeByCredential(w http.ResponseWriter, r *http.Request) (*stor
 	}
 	// An empty credential (never adopted) must never authenticate.
 	if n.Credential == "" || !ctEq(bearer(r), n.Credential) {
+		s.authFailure(r, "node credential")
 		writeErr(w, http.StatusUnauthorized, "invalid node credential")
 		return nil, false
 	}
@@ -799,9 +1006,17 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-func cors(next http.Handler) http.Handler {
+// cors allows exactly one configured origin (for the Vite dev server). With no
+// origin configured it adds no CORS headers at all: the embedded UI is
+// same-origin, and a wildcard here would let any website a LAN user visits
+// call the API from their browser.
+func cors(next http.Handler, origin string) http.Handler {
+	if origin == "" {
+		return next
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Traego-Join-Token")
 		if r.Method == http.MethodOptions {

@@ -67,7 +67,7 @@ async function scrollDown() {
       <div class="row gap-3">
         <label v-if="models.length" class="modelpick">
           <Icon name="sparkles" :size="13" />
-          <select v-model="selectedModel">
+          <select v-model="selectedModel" aria-label="Model">
             <option v-for="m in models" :key="m.id" :value="m.id">{{ m.name }}</option>
           </select>
         </label>
@@ -88,7 +88,8 @@ async function scrollDown() {
       <div v-for="(m,i) in messages" :key="i" class="msg" :class="m.role">
         <div class="avatar" :class="m.role"><Icon :name="m.role==='ai' ? 'sparkles' : 'users'" :size="14"/></div>
         <div class="bubble" :class="{err: m.error}">
-          <span v-if="m.error">⚠ {{ m.error }}</span>
+          <span v-if="m.error && /no model/i.test(m.error)">⚠ No model is available yet — ask your admin to enable one in the <a href="#/ai" class="errlink">admin console</a>.</span>
+          <span v-else-if="m.error">⚠ {{ m.error }}</span>
           <span v-else style="white-space:pre-wrap">{{ m.text }}</span>
         </div>
       </div>
@@ -101,8 +102,8 @@ async function scrollDown() {
 
     <footer class="composer">
       <div class="cbar">
-        <input v-model="input" placeholder="Send a message…" @keyup.enter="send()" :disabled="sending" />
-        <button class="send" :disabled="sending || !input.trim()" @click="send()"><Icon name="chevron" :size="18"/></button>
+        <input v-model="input" placeholder="Send a message…" aria-label="Message" @keyup.enter="send()" :disabled="sending" />
+        <button class="send" aria-label="Send message" :disabled="sending || !input.trim()" @click="send()"><Icon name="chevron" :size="18"/></button>
       </div>
       <p class="hint faint">Traego runs this model locally. Responses may be imperfect.</p>
     </footer>
@@ -120,7 +121,8 @@ async function scrollDown() {
 .exit { font-size: 12.5px; color: var(--tx-2); display: inline-flex; align-items: center; gap: 3px; }
 .exit:hover { color: var(--tx-0); }
 .modelpick { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg-2); color: var(--ai); }
-.modelpick select { background: transparent; border: 0; outline: none; color: var(--tx-1); font-size: 12.5px; font-family: inherit; cursor: pointer; max-width: 160px; }
+.modelpick select { background: transparent; border: 0; color: var(--tx-1); font-size: 12.5px; font-family: inherit; cursor: pointer; max-width: 160px; }
+.modelpick:focus-within { border-color: rgba(167,139,250,.5); }
 .modelpick select option { background: var(--bg-2); color: var(--tx-1); }
 
 .conv { flex: 1; overflow-y: auto; padding: 26px 0; }
@@ -129,17 +131,19 @@ async function scrollDown() {
   background: rgba(167,139,250,.12); border: 1px solid rgba(167,139,250,.3); box-shadow: 0 0 40px -10px var(--ai-glow); }
 .empty h2 { font-size: 20px; margin-bottom: 8px; }
 .suggs { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
-.sg { padding: 12px 14px; border-radius: 11px; border: 1px solid var(--line); background: var(--bg-2); color: var(--tx-1); font-size: 13px; text-align: left; transition: all .14s; }
+.sg { padding: 12px 14px; border-radius: 11px; border: 1px solid var(--line); background: var(--bg-2); color: var(--tx-1); font-size: 13px; text-align: left; transition: border-color .14s, color .14s; }
 .sg:hover { border-color: rgba(167,139,250,.4); color: var(--tx-0); }
 
 .msg { max-width: 720px; margin: 0 auto; display: flex; gap: 12px; padding: 10px 20px; }
+.msg.user { flex-direction: row-reverse; }
 .avatar { width: 30px; height: 30px; flex: none; border-radius: 9px; display: grid; place-items: center; }
-.avatar.ai { color: #fff; background: linear-gradient(150deg, var(--ai), #6d28d9); }
+.avatar.ai { color: var(--tx-0); background: linear-gradient(150deg, var(--ai), #6d28d9); }
 .avatar.user { color: var(--tx-1); background: var(--bg-3); border: 1px solid var(--line); }
 .bubble { padding: 11px 15px; border-radius: 13px; font-size: 14px; line-height: 1.55; color: var(--tx-0); }
-.msg.user .bubble { background: var(--bg-3); border: 1px solid var(--line); }
+.msg.user .bubble { background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.25); }
 .msg.ai .bubble { background: linear-gradient(180deg, var(--bg-2), var(--bg-1)); border: 1px solid var(--line); }
 .bubble.err { color: var(--warn); border-color: rgba(251,191,36,.3); }
+.errlink { color: var(--brand); text-decoration: underline; }
 .thinking { display: inline-flex; gap: 5px; align-items: center; }
 .thinking span { width: 7px; height: 7px; border-radius: 50%; background: var(--ai); animation: bob 1.1s infinite; }
 .thinking span:nth-child(2) { animation-delay: .15s; } .thinking span:nth-child(3) { animation-delay: .3s; }
@@ -148,8 +152,8 @@ async function scrollDown() {
 .composer { padding: 14px 20px 18px; border-top: 1px solid var(--line); }
 .cbar { max-width: 720px; margin: 0 auto; display: flex; gap: 10px; align-items: center; background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: 14px; padding: 7px 8px 7px 16px; }
 .cbar:focus-within { border-color: rgba(167,139,250,.5); }
-.cbar input { flex: 1; background: transparent; border: 0; outline: none; color: var(--tx-0); font-size: 14.5px; font-family: inherit; }
-.send { width: 38px; height: 38px; flex: none; border: 0; border-radius: 10px; display: grid; place-items: center; color: #fff; background: linear-gradient(150deg, var(--ai), #6d28d9); }
+.cbar input { flex: 1; background: transparent; border: 0; outline: none; color: var(--tx-0); font-size: 14.5px; font-family: inherit; } /* focus shown by .cbar:focus-within */
+.send { width: 38px; height: 38px; flex: none; border: 0; border-radius: 10px; display: grid; place-items: center; color: var(--tx-0); background: linear-gradient(150deg, var(--ai), #6d28d9); }
 .send:disabled { opacity: .4; }
 .hint { max-width: 720px; margin: 8px auto 0; text-align: center; font-size: 11px; }
 </style>

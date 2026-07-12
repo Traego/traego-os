@@ -20,6 +20,7 @@ type Bolt struct {
 var (
 	nodesBucket = []byte("nodes")
 	sitesBucket = []byte("sites")
+	metaBucket  = []byte("meta")
 )
 
 // OpenBolt opens (or creates) the database file at path.
@@ -29,7 +30,7 @@ func OpenBolt(path string) (*Bolt, error) {
 		return nil, err
 	}
 	if err := db.Update(func(tx *bbolt.Tx) error {
-		for _, b := range [][]byte{nodesBucket, sitesBucket} {
+		for _, b := range [][]byte{nodesBucket, sitesBucket, metaBucket} {
 			if _, e := tx.CreateBucketIfNotExists(b); e != nil {
 				return e
 			}
@@ -148,6 +149,29 @@ func (b *Bolt) List() ([]*Node, error) {
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out, nil
+}
+
+func (b *Bolt) GetMeta(key string) ([]byte, error) {
+	var out []byte
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		v := tx.Bucket(metaBucket).Get([]byte(key))
+		if v == nil {
+			return ErrNotFound
+		}
+		out = make([]byte, len(v))
+		copy(out, v)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (b *Bolt) PutMeta(key string, value []byte) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(metaBucket).Put([]byte(key), value)
+	})
 }
 
 func (b *Bolt) PutSite(s *Site) error {

@@ -119,6 +119,12 @@ type Store interface {
 	PutSite(s *Site) error          // create or update (idempotent)
 	GetSite(id string) (*Site, error)
 	ListSites() ([]*Site, error)
+
+	// Meta is a small KV for controller state that isn't node inventory (e.g.
+	// the CA root). Keeping it in the store means it persists — and later
+	// replicates — through the same pluggable layer as everything else.
+	GetMeta(key string) ([]byte, error) // ErrNotFound if absent
+	PutMeta(key string, value []byte) error
 }
 
 // Memory is an in-memory Store. Zero value is not usable; use NewMemory.
@@ -126,10 +132,36 @@ type Memory struct {
 	mu    sync.RWMutex
 	nodes map[string]Node
 	sites map[string]Site
+	meta  map[string][]byte
 }
 
 // NewMemory returns an empty in-memory store.
-func NewMemory() *Memory { return &Memory{nodes: make(map[string]Node), sites: make(map[string]Site)} }
+func NewMemory() *Memory {
+	return &Memory{nodes: make(map[string]Node), sites: make(map[string]Site), meta: make(map[string][]byte)}
+}
+
+// GetMeta returns a copy of the value for key, or ErrNotFound.
+func (m *Memory) GetMeta(key string) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.meta[key]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	out := make([]byte, len(v))
+	copy(out, v)
+	return out, nil
+}
+
+// PutMeta stores a copy of value under key (create or update).
+func (m *Memory) PutMeta(key string, value []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v := make([]byte, len(value))
+	copy(v, value)
+	m.meta[key] = v
+	return nil
+}
 
 // PutSite creates or updates a site (idempotent).
 func (m *Memory) PutSite(s *Site) error {

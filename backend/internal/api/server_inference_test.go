@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -57,6 +58,9 @@ func inferenceHarness(t *testing.T) *harness {
 	t.Helper()
 	ol := mockOllama(t)
 	mgr := inference.NewManager(ollama.New(ol.URL))
+	if err := mgr.Install(context.Background(), 16); err != nil {
+		t.Fatalf("install AI module: %v", err)
+	}
 	st := store.NewMemory()
 	h := &harness{st: st, clock: time.Unix(1_700_000_000, 0)}
 	srv, err := New(Config{
@@ -102,7 +106,7 @@ func TestInferenceFullFlow(t *testing.T) {
 	}
 
 	// chat before any model is enabled -> 409
-	if rec := h.do("POST", "/api/v1/chat", map[string]string{"prompt": "hi"}, nil); rec.Code != http.StatusConflict {
+	if rec := h.do("POST", "/api/v1/chat", map[string]string{"prompt": "hi"}, adminHdr); rec.Code != http.StatusConflict {
 		t.Fatalf("chat-before-enable: want 409, got %d", rec.Code)
 	}
 
@@ -135,8 +139,8 @@ func TestInferenceFullFlow(t *testing.T) {
 		t.Fatalf("enable: %d (%s)", rec.Code, rec.Body)
 	}
 
-	// chat (public, no admin) -> reply from the model
-	rec = h.do("POST", "/api/v1/chat", map[string]string{"prompt": "meaning of life?"}, nil)
+	// chat (admin-authed) -> reply from the model
+	rec = h.do("POST", "/api/v1/chat", map[string]string{"prompt": "meaning of life?"}, adminHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("chat: %d (%s)", rec.Code, rec.Body)
 	}
@@ -176,11 +180,11 @@ func TestActivityReflectsRealTokens(t *testing.T) {
 	h.do("POST", "/api/v1/models/llama3.2:1b/enable", nil, adminHdr)
 
 	h.srv.RecordActivity() // baseline (0 tokens so far)
-	h.do("POST", "/api/v1/chat", map[string]string{"prompt": "hi"}, nil) // +12 tokens
+	h.do("POST", "/api/v1/chat", map[string]string{"prompt": "hi"}, adminHdr) // +12 tokens
 	h.clock = h.clock.Add(time.Second)
 	h.srv.RecordActivity() // 12 tokens / 1s = 12 tok/s
 
-	rec := h.do("GET", "/api/v1/activity", nil, nil)
+	rec := h.do("GET", "/api/v1/activity", nil, adminHdr)
 	var resp activityResp
 	mustJSON(t, rec, &resp)
 	if resp.TokensPerSec != 12 {
@@ -200,8 +204,8 @@ func TestChatModelSelection(t *testing.T) {
 		})
 	}
 
-	// the public selectable list = the enabled set (no admin key)
-	rec := h.do("GET", "/api/v1/chat/models", nil, nil)
+	// the selectable list = the enabled set
+	rec := h.do("GET", "/api/v1/chat/models", nil, adminHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("chat models: %d", rec.Code)
 	}
@@ -216,11 +220,11 @@ func TestChatModelSelection(t *testing.T) {
 	}
 
 	// chat selecting an enabled model -> 200
-	if rec := h.do("POST", "/api/v1/chat", map[string]any{"model": "gemma2:2b", "prompt": "hi"}, nil); rec.Code != http.StatusOK {
+	if rec := h.do("POST", "/api/v1/chat", map[string]any{"model": "gemma2:2b", "prompt": "hi"}, adminHdr); rec.Code != http.StatusOK {
 		t.Fatalf("model-selected chat: %d (%s)", rec.Code, rec.Body)
 	}
 	// selecting a model that isn't enabled -> 409
-	if rec := h.do("POST", "/api/v1/chat", map[string]any{"model": "qwen2.5:14b", "prompt": "hi"}, nil); rec.Code != http.StatusConflict {
+	if rec := h.do("POST", "/api/v1/chat", map[string]any{"model": "qwen2.5:14b", "prompt": "hi"}, adminHdr); rec.Code != http.StatusConflict {
 		t.Fatalf("not-enabled select: want 409, got %d", rec.Code)
 	}
 
@@ -228,7 +232,7 @@ func TestChatModelSelection(t *testing.T) {
 	if rec := h.do("POST", "/api/v1/models/gemma2:2b/disable", nil, adminHdr); rec.Code != http.StatusOK {
 		t.Fatalf("disable: %d", rec.Code)
 	}
-	rec = h.do("GET", "/api/v1/chat/models", nil, nil)
+	rec = h.do("GET", "/api/v1/chat/models", nil, adminHdr)
 	var after struct {
 		Models []struct{ ID string } `json:"models"`
 	}
@@ -261,8 +265,20 @@ func TestEnableBeforeDeploy(t *testing.T) {
 
 func TestChatEmptyPrompt(t *testing.T) {
 	h := inferenceHarness(t)
-	if rec := h.do("POST", "/api/v1/chat", map[string]string{"prompt": "  "}, nil); rec.Code != http.StatusBadRequest {
+	if rec := h.do("POST", "/api/v1/chat", map[string]string{"prompt": "  "}, adminHdr); rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+// TestChatRequiresAuth: an unauthenticated inference endpoint would let any
+// reachable client (or any website in a LAN user's browser) burn the GPU.
+func TestChatRequiresAuth(t *testing.T) {
+	h := inferenceHarness(t)
+	if rec := h.do("POST", "/api/v1/chat", map[string]string{"prompt": "hi"}, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("chat without auth: want 401, got %d", rec.Code)
+	}
+	if rec := h.do("GET", "/api/v1/chat/models", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("chat/models without auth: want 401, got %d", rec.Code)
 	}
 }
 

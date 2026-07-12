@@ -81,6 +81,25 @@ func runStoreContract(t *testing.T, s Store) {
 	if sites, _ := s.ListSites(); len(sites) != 2 || sites[0].ID != "branch" {
 		t.Fatalf("listsites wrong: %+v", sites)
 	}
+
+	// meta
+	if _, err := s.GetMeta("absent"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("getmeta missing: want ErrNotFound, got %v", err)
+	}
+	if err := s.PutMeta("k", []byte("v1")); err != nil {
+		t.Fatalf("putmeta: %v", err)
+	}
+	if err := s.PutMeta("k", []byte("v2")); err != nil { // idempotent update
+		t.Fatalf("putmeta update: %v", err)
+	}
+	v, err := s.GetMeta("k")
+	if err != nil || string(v) != "v2" {
+		t.Fatalf("getmeta: %q %v", v, err)
+	}
+	v[0] = 'X' // callers get copies, never internal buffers
+	if v2, _ := s.GetMeta("k"); string(v2) != "v2" {
+		t.Fatalf("getmeta returned internal buffer, mutation leaked: %q", v2)
+	}
 }
 
 func TestMemoryContract(t *testing.T) { runStoreContract(t, NewMemory()) }
@@ -101,6 +120,7 @@ func TestBoltPersistsAcrossReopen(t *testing.T) {
 	n.Site = "branch"
 	_ = b1.Create(n)
 	_ = b1.PutSite(&Site{ID: "branch", Name: "Branch Office"})
+	_ = b1.PutMeta("ca.root", []byte("pem-bytes"))
 	b1.Close()
 
 	b2, err := OpenBolt(path)
@@ -121,5 +141,8 @@ func TestBoltPersistsAcrossReopen(t *testing.T) {
 	}
 	if s, err := b2.GetSite("branch"); err != nil || s.Name != "Branch Office" {
 		t.Fatalf("site not persisted: %+v %v", s, err)
+	}
+	if v, err := b2.GetMeta("ca.root"); err != nil || string(v) != "pem-bytes" {
+		t.Fatalf("meta not persisted: %q %v", v, err)
 	}
 }

@@ -7,6 +7,7 @@ package deploy
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"os/exec"
@@ -15,9 +16,16 @@ import (
 )
 
 const (
-	controllerURL = "http://127.0.0.1:8443"
+	controllerURL = "https://127.0.0.1:18443" // compose maps 18443 -> controller 8443
 	adminKey      = "dev-admin-key"
 )
+
+// client skips TLS verification: this is the throwaway dev harness talking to
+// a compose controller with a freshly generated CA. Real deployments verify by
+// pinning the CA fingerprint the controller prints at boot.
+var client = &http.Client{Transport: &http.Transport{
+	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+}}
 
 type node struct {
 	ID          string `json:"id"`
@@ -37,7 +45,7 @@ func TestComposeJoinFlow(t *testing.T) {
 
 	// 1. controller becomes healthy
 	if !waitFor(90*time.Second, func() bool {
-		resp, err := http.Get(controllerURL + "/healthz")
+		resp, err := client.Get(controllerURL + "/healthz")
 		if err != nil {
 			return false
 		}
@@ -100,7 +108,7 @@ func listNodes(t *testing.T) []node {
 	t.Helper()
 	req, _ := http.NewRequest("GET", controllerURL+"/api/v1/nodes", nil)
 	req.Header.Set("Authorization", "Bearer "+adminKey)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil
 	}
@@ -117,7 +125,7 @@ func adopt(t *testing.T, id, code, role string) {
 	body, _ := json.Marshal(map[string]string{"pairing_code": code, "role": role})
 	req, _ := http.NewRequest("POST", controllerURL+"/api/v1/nodes/"+id+"/adopt", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+adminKey)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("adopt %s: %v", id, err)
 	}

@@ -246,3 +246,38 @@ func TestHealthy(t *testing.T) {
 		t.Fatal("want unhealthy")
 	}
 }
+
+func TestInstallUninstall(t *testing.T) {
+	m := NewManager(newFake())
+	if m.Installed() {
+		t.Fatal("should start uninstalled")
+	}
+	if err := m.Install(context.Background(), 16); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if !m.Installed() || m.VRAMReservedGB() != 16 {
+		t.Fatalf("installed=%v vram=%v", m.Installed(), m.VRAMReservedGB())
+	}
+	// uninstall clears the reservation and the enabled set
+	_ = m.Deploy("llama3.2:1b")
+	_ = m.Enable(context.Background(), "llama3.2:1b")
+	m.Uninstall()
+	if m.Installed() || m.VRAMReservedGB() != 0 {
+		t.Fatalf("after uninstall: installed=%v vram=%v", m.Installed(), m.VRAMReservedGB())
+	}
+	if m.Enabled() != "" {
+		t.Fatalf("uninstall should clear enabled set, got %q", m.Enabled())
+	}
+}
+
+func TestInstallBackendDown(t *testing.T) {
+	f := newFake()
+	f.healthy = false
+	m := NewManager(f)
+	if err := m.Install(context.Background(), 8); !errors.Is(err, ErrBackendDown) {
+		t.Fatalf("install with backend down: want ErrBackendDown, got %v", err)
+	}
+	if m.Installed() {
+		t.Fatal("should not be installed after a failed install")
+	}
+}

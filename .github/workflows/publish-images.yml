@@ -1,0 +1,48 @@
+# Publishes the controller and traegod images to ghcr.io on pushes to main —
+# these are what traego.ai/install.sh pulls on people's machines.
+name: publish-images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "src/**"
+      - "index.html"
+      - "package.json"
+      - ".github/workflows/publish-images.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: publish-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push controller (repo-root context — embeds the UI)
+        run: |
+          docker build -f backend/deploy/Dockerfile.controller \
+            -t ghcr.io/traego/controller:${GITHUB_SHA::7} -t ghcr.io/traego/controller:latest .
+          docker push ghcr.io/traego/controller:${GITHUB_SHA::7}
+          docker push ghcr.io/traego/controller:latest
+
+      - name: Build and push traegod
+        working-directory: backend
+        run: |
+          docker build -f deploy/Dockerfile.traegod \
+            -t ghcr.io/traego/traegod:${GITHUB_SHA::7} -t ghcr.io/traego/traegod:latest .
+          docker push ghcr.io/traego/traegod:${GITHUB_SHA::7}
+          docker push ghcr.io/traego/traegod:latest

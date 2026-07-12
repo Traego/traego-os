@@ -1,8 +1,11 @@
 package ca
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"io"
 	"net/http"
@@ -126,4 +129,77 @@ func marshalKey(t *testing.T, key any) []byte {
 		t.Fatalf("marshal key: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+}
+
+// TestLoadRoundTrip proves a persisted CA is the same authority after reload:
+// certs signed before a "restart" still verify, and the reloaded CA can keep
+// signing certs that verify against pools built from the original.
+func TestLoadRoundTrip(t *testing.T) {
+	orig, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	keyPEM, err := orig.KeyPEM()
+	if err != nil {
+		t.Fatalf("KeyPEM: %v", err)
+	}
+	_, csr, _ := NewKeyAndCSR("n-1")
+	before, err := orig.SignCSR(csr, "n-1", time.Hour)
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+
+	reloaded, err := Load(orig.CertPEM(), keyPEM)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if reloaded.Fingerprint() != orig.Fingerprint() {
+		t.Fatalf("fingerprint changed across reload: %s != %s", reloaded.Fingerprint(), orig.Fingerprint())
+	}
+	// a cert issued before the restart verifies against the reloaded pool
+	block, _ := pem.Decode(before)
+	leaf, _ := x509.ParseCertificate(block.Bytes)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: reloaded.Pool(), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		t.Fatalf("pre-restart cert no longer verifies: %v", err)
+	}
+	// and the reloaded CA issues certs the original pool trusts
+	_, csr2, _ := NewKeyAndCSR("n-2")
+	after, err := reloaded.SignCSR(csr2, "n-2", time.Hour)
+	if err != nil {
+		t.Fatalf("reloaded SignCSR: %v", err)
+	}
+	block2, _ := pem.Decode(after)
+	leaf2, _ := x509.ParseCertificate(block2.Bytes)
+	if _, err := leaf2.Verify(x509.VerifyOptions{Roots: orig.Pool(), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		t.Fatalf("post-restart cert does not verify against original pool: %v", err)
+	}
+}
+
+func TestLoadRejectsMismatchedKey(t *testing.T) {
+	a, _ := New()
+	b, _ := New()
+	bKey, _ := b.KeyPEM()
+	if _, err := Load(a.CertPEM(), bKey); err == nil {
+		t.Fatal("expected error loading cert with a different CA's key")
+	}
+}
+
+// TestSignCSRRejectsWeakKey: the root must never sign key types nodes don't
+// generate (e.g. RSA), closing the door on weak-key certificates.
+func TestSignCSRRejectsWeakKey(t *testing.T) {
+	c, _ := New()
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "n-evil"},
+	}, rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+	if _, err := c.SignCSR(csr, "n-evil", time.Hour); err == nil {
+		t.Fatal("expected RSA CSR to be rejected")
+	}
 }

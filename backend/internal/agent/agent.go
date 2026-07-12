@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -17,6 +19,8 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/traego/traego/internal/ca"
@@ -41,6 +45,13 @@ type Config struct {
 	// adoption and heartbeat over mTLS to SecureURL instead of the bearer API.
 	Secure    bool
 	SecureURL string
+
+	// CAFingerprint is the hex SHA-256 of the controller CA certificate
+	// (printed by the controller at boot). When set, the agent refuses any
+	// TLS controller that can't present a chain rooted in that exact CA —
+	// protecting the join against interception. When empty, the agent trusts
+	// the CA on first use and warns.
+	CAFingerprint string
 }
 
 // Agent drives one node through its lifecycle. Methods are intended to be
@@ -58,6 +69,11 @@ type Agent struct {
 
 	secure       bool
 	secureClient *http.Client
+
+	// pinned controller CA (from CAFingerprint match or trust-on-first-use);
+	// guarded by a mutex because the HTTP transport verifies concurrently.
+	pinMu    sync.Mutex
+	pinnedCA *x509.Certificate
 }
 
 // New builds an Agent with defaults applied.
@@ -71,13 +87,101 @@ func New(cfg Config) *Agent {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = time.Second
 	}
-	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 10 * time.Second}
-	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
 	}
-	return &Agent{cfg: cfg, http: cfg.HTTPClient, metrics: metrics.NewCollector()}
+	a := &Agent{cfg: cfg, metrics: metrics.NewCollector()}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{Timeout: 10 * time.Second}
+		if strings.HasPrefix(cfg.ControllerURL, "https://") {
+			// controller serves TLS from its own CA: verify against the
+			// pinned fingerprint (or TOFU) instead of the system roots
+			cfg.HTTPClient.Transport = &http.Transport{TLSClientConfig: a.tlsConfig(nil)}
+		}
+	}
+	a.http = cfg.HTTPClient
+	return a
+}
+
+// tlsConfig builds a client TLS config that authenticates the controller via
+// the pinned CA rather than system roots/hostnames: homelab controllers are
+// reached by arbitrary IPs, so identity comes from the CA — which signs
+// ServerAuth certs only for the controller itself.
+func (a *Agent) tlsConfig(clientCert *tls.Certificate) *tls.Config {
+	cfg := &tls.Config{
+		MinVersion:            tls.VersionTLS12,
+		InsecureSkipVerify:    true, // verification happens in VerifyPeerCertificate
+		VerifyPeerCertificate: a.verifyController,
+	}
+	if clientCert != nil {
+		cfg.Certificates = []tls.Certificate{*clientCert}
+	}
+	return cfg
+}
+
+// verifyController checks the presented chain against the pinned controller
+// CA. On the very first connection the CA is selected by CAFingerprint match
+// (or trusted-on-first-use with a warning); afterwards it must never change.
+func (a *Agent) verifyController(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return fmt.Errorf("controller presented no certificate")
+	}
+	leaf, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return err
+	}
+	var chain []*x509.Certificate
+	for _, der := range rawCerts[1:] {
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			return err
+		}
+		chain = append(chain, c)
+	}
+
+	var pinned *x509.Certificate
+	for _, c := range chain {
+		if !c.IsCA {
+			continue
+		}
+		if p, err := a.pinCA(c); err == nil {
+			pinned = p
+			break
+		}
+	}
+	if pinned == nil {
+		return fmt.Errorf("controller did not present a CA matching the pinned fingerprint")
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(pinned)
+	inter := x509.NewCertPool()
+	for _, c := range chain {
+		inter.AddCert(c)
+	}
+	_, err = leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+	return err
+}
+
+// pinCA records the controller CA on first sight, enforcing CAFingerprint when
+// configured (TOFU with a warning otherwise). Once pinned it never changes for
+// the life of the process; a different CA is rejected.
+func (a *Agent) pinCA(c *x509.Certificate) (*x509.Certificate, error) {
+	a.pinMu.Lock()
+	defer a.pinMu.Unlock()
+	if a.pinnedCA != nil {
+		return a.pinnedCA, nil
+	}
+	sum := sha256.Sum256(c.Raw)
+	fp := hex.EncodeToString(sum[:])
+	want := strings.ToLower(strings.ReplaceAll(a.cfg.CAFingerprint, ":", ""))
+	if want != "" && fp != want {
+		return nil, fmt.Errorf("controller CA fingerprint %s does not match pinned %s", fp, want)
+	}
+	if want == "" {
+		a.cfg.Logf("WARNING: trusting controller CA on first use (fingerprint %s) — set TRAEGO_CA_FINGERPRINT to protect the join against interception", fp)
+	}
+	a.pinnedCA = c
+	return c, nil
 }
 
 // Accessors (mainly for tests and the CLI status line).
@@ -142,7 +246,14 @@ func (a *Agent) AwaitCredential(ctx context.Context) error {
 			credentialReq{EnrollSecret: a.enrollSecret}, nil, &resp)
 		switch {
 		case err != nil:
-			return fmt.Errorf("credential: %w", err)
+			// transient (controller restarting, network blip): keep waiting —
+			// a pending node's whole job is to outwait the operator
+			a.cfg.Logf("credential: %v — retrying", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(a.cfg.PollInterval * 5):
+			}
 		case status == http.StatusOK:
 			a.credential, a.role = resp.Credential, resp.Role
 			a.cfg.Logf("adopted as role=%s — credential issued", a.role)
@@ -153,6 +264,15 @@ func (a *Agent) AwaitCredential(ctx context.Context) error {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(a.cfg.PollInterval):
+			}
+		case status == http.StatusTooManyRequests:
+			// the controller rate-limits our source IP (someone nearby is
+			// failing auth); back off well past the limiter window
+			a.cfg.Logf("credential: rate limited — backing off")
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(90 * time.Second):
 			}
 		default:
 			return fmt.Errorf("credential: unexpected status %d", status)
@@ -180,16 +300,28 @@ func (a *Agent) GoSecure(ctx context.Context) error {
 		return fmt.Errorf("certificate: unexpected status %d", status)
 	}
 
+	// Anchor trust: over an https control plane the CA is already pinned from
+	// the TLS handshake and the response copy is ignored; over a plaintext
+	// control plane the response CA is checked against TRAEGO_CA_FINGERPRINT
+	// (or trusted on first use with a warning).
+	caBlock, _ := pem.Decode([]byte(cr.CA))
+	if caBlock == nil {
+		return fmt.Errorf("controller returned no CA certificate")
+	}
+	caCert, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("controller CA: %w", err)
+	}
+	if _, err := a.pinCA(caCert); err != nil {
+		return err
+	}
+
 	clientCert, err := tls.X509KeyPair([]byte(cr.Certificate), pemKey(key))
 	if err != nil {
 		return fmt.Errorf("client keypair: %w", err)
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM([]byte(cr.CA)) {
-		return fmt.Errorf("could not trust controller CA")
-	}
 	a.secureClient = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, Certificates: []tls.Certificate{clientCert}},
+		TLSClientConfig: a.tlsConfig(&clientCert),
 	}}
 
 	// confirm the mutual handshake works and the controller verifies our identity
@@ -265,14 +397,18 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.cfg.Secure {
 		if err := a.GoSecure(ctx); err != nil {
-			a.cfg.Logf("secure mode unavailable, falling back to bearer heartbeats: %v", err)
+			a.cfg.Logf("secure mode unavailable, heartbeating over bearer until mTLS succeeds: %v", err)
 		}
 	}
 	if err := a.Heartbeat(ctx); err != nil {
 		a.cfg.Logf("initial heartbeat failed: %v", err)
 	}
+	// mTLS is retried, never abandoned: a node must not silently settle on
+	// plaintext bearer heartbeats because of one failed handshake.
+	const secureRetryEvery = 6 // heartbeat ticks (~1min at the default interval)
 	ticker := time.NewTicker(a.cfg.HeartbeatInterval)
 	defer ticker.Stop()
+	var ticks, secureFails int
 	for {
 		select {
 		case <-ctx.Done():
@@ -281,8 +417,23 @@ func (a *Agent) Run(ctx context.Context) error {
 			cancel()
 			return ctx.Err()
 		case <-ticker.C:
+			ticks++
+			if a.cfg.Secure && !a.secure && ticks%secureRetryEvery == 0 {
+				if err := a.GoSecure(ctx); err != nil {
+					a.cfg.Logf("mTLS retry failed: %v", err)
+				}
+			}
 			if err := a.Heartbeat(ctx); err != nil {
 				a.cfg.Logf("heartbeat error: %v", err)
+				if a.secure {
+					if secureFails++; secureFails >= 3 {
+						a.secure = false
+						secureFails = 0
+						a.cfg.Logf("mTLS heartbeats failing, using bearer until mTLS is re-established")
+					}
+				}
+			} else {
+				secureFails = 0
 			}
 		}
 	}
